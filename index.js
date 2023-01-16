@@ -2,15 +2,14 @@
 const util = require('util');
 const http = require('http');
 const raven = require('raven');
-const sharejs = require('share');
-const livedb = require('livedb');
+const sharedb = require('sharedb');
 const Duplex = require('stream').Duplex;
 const WebSocketServer = require('ws').Server;
 const express = require('express');
 const bodyParser = require('body-parser');
 const morgan = require('morgan');
 const async = require('async');
-const livedbMongo = require('livedb-mongo');
+const sharedbMongo = require('sharedb-mongo');
 const fs = require('fs');
 const path = require('path');
 
@@ -21,7 +20,7 @@ const settings = {
     port: process.env.SHAREJS_SERVER_PORT || 7007,
     corsAllowOrigin: process.env.SHAREJS_CORS_ALLOW_ORIGIN || 'http://localhost:5000',
     // Mongo options
-    dbUrl: process.env.SHAREJS_DB_URL || 'mongodb://localhost:27017/sharejs',
+    dbUrl: process.env.SHAREJS_DB_URL || 'mongodb://localhost:27017/sharedb',
     // Raven client
     sentryDSN: process.env.SHAREJS_SENTRY_DSN
 };
@@ -81,9 +80,8 @@ if (mongoSSL) {
 }
 
 // Server setup
-const mongo = livedbMongo(settings.dbUrl, mongoOptions);
-const backend = livedb.client(mongo);
-const share = sharejs.server.createClient({backend: backend});
+const db = sharedbMongo(settings.dbUrl, mongoOptions);
+const share = new sharedb({db})
 const app = express();
 const jsonParser = bodyParser.json();
 const server = http.createServer(app);
@@ -109,8 +107,8 @@ app.use(function(req, res, next) {
     next();
 });
 
-// Serve static sharejs files
-app.use(express.static(sharejs.scriptsDir));
+// Serve static sharedb files
+app.use(express.static(sharedb.scriptsDir));
 
 // Broadcasts message to all clients connected to that doc
 // TODO: Can we access the relevant list without iterating over every client?
@@ -240,7 +238,7 @@ wss.on('connection', function(client) {
         client.close();
     });
 
-    // Give the stream to sharejs
+    // Give the stream to sharedb
     return share.listen(stream);
 });
 
