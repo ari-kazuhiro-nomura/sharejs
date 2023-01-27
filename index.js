@@ -105,8 +105,7 @@ app.use(function(req, res, next) {
 });
 
 // Serve static sharedb files
-app.use(express.static(''));
-
+app.use(express.static('/'));
 // Broadcasts message to all clients connected to that doc
 // TODO: Can we access the relevant list without iterating over every client?
 wss.broadcast = function(docId, message) {
