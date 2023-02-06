@@ -2,14 +2,15 @@
 const util = require('util');
 const http = require('http');
 const raven = require('raven');
-const sharedb = require('sharedb');
+const sharejs = require('share');
+const livedb = require('livedb');
 const Duplex = require('stream').Duplex;
 const WebSocketServer = require('ws').Server;
 const express = require('express');
 const bodyParser = require('body-parser');
 const morgan = require('morgan');
 const async = require('async');
-const sharedbMongo = require('sharedb-mongo');
+const livedbMongo = require('livedb-mongo');
 const fs = require('fs');
 const path = require('path');
 
@@ -42,7 +43,10 @@ if (settings.sentryDSN) {
     }
 }
 
-const mongoOptions = {};
+const mongoOptions = {
+    safe: true,
+    server: {}
+};
 
 const mongoSSL = !!process.env.MONGO_SSL;
 const mongoSSLCertFile = process.env.MONGO_SSL_CERT_FILE;
@@ -52,33 +56,34 @@ const mongoSSLValidate = !!process.env.MONGO_SSL_VALIDATE;
 
 if (mongoSSL) {
     console.info('Mongo SSL on');
-    mongoOptions.ssl = true;
+    mongoOptions.server.ssl = true;
 
     if (fs.existsSync(mongoSSLCertFile) && fs.existsSync(mongoSSLKeyFile)) {
         console.info('Mongo SSL:\n\tCert File: %s,\n\tKey File: %s', mongoSSLCertFile, mongoSSLKeyFile);
         // sslCert {Buffer/String, default:null}, String or buffer containing the certificate we wish to present (needs to have a mongod server with ssl support, 2.4 or higher)
-        mongoOptions.sslCert = fs.readFileSync(mongoSSLCertFile);
+        mongoOptions.server.sslCert = fs.readFileSync(mongoSSLCertFile);
         // sslKey {Buffer/String, default:null}, String or buffer containing the certificate private key we wish to present (needs to have a mongod server with ssl support, 2.4 or higher)
-        mongoOptions.sslKey = fs.readFileSync(mongoSSLKeyFile);
+        mongoOptions.server.sslKey = fs.readFileSync(mongoSSLKeyFile);
     }
 
     if (fs.existsSync(mongoSSLCADir)) {
         // sslCA {Array, default:null}, Array of valid certificates either as Buffers or Strings (needs to have a mongod server with ssl support, 2.4 or higher)
-        mongoOptions.sslCA = fs.readdirSync(mongoSSLCADir)
+        mongoOptions.server.sslCA = fs.readdirSync(mongoSSLCADir)
             .map(function(file) {
                 return fs.readFileSync(path.join(mongoSSLCADir, file));
             });
 
         // sslValidate {Boolean, default:false}, validate mongod server certificate against ca (needs to have a mongod server with ssl support, 2.4 or higher)
-        mongoOptions.sslValidate = mongoSSLValidate;
+        mongoOptions.server.sslValidate = mongoSSLValidate;
 
-        console.info('Mongo SSL CA validation: %s', mongoOptions.sslValidate ? 'on' : 'off');
+        console.info('Mongo SSL CA validation: %s', mongoOptions.server.sslValidate ? 'on' : 'off');
     }
 }
 
 // Server setup
-const db = sharedbMongo(settings.dbUrl, mongoOptions);
-const share = new sharedb({db});
+const mongo = livedbMongo(settings.dbUrl, mongoOptions);
+const backend = livedb.client(mongo);
+const share = sharejs.server.createClient({backend: backend});
 const app = express();
 const jsonParser = bodyParser.json();
 const server = http.createServer(app);
@@ -104,8 +109,9 @@ app.use(function(req, res, next) {
     next();
 });
 
-// Serve static sharedb files
-app.use(express.static('/'));
+// Serve static sharejs files
+app.use(express.static(sharejs.scriptsDir));
+
 // Broadcasts message to all clients connected to that doc
 // TODO: Can we access the relevant list without iterating over every client?
 wss.broadcast = function(docId, message) {
@@ -234,7 +240,7 @@ wss.on('connection', function(client) {
         client.close();
     });
 
-    // Give the stream to sharedb
+    // Give the stream to sharejs
     return share.listen(stream);
 });
 
