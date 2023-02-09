@@ -2,15 +2,15 @@
 const util = require('util');
 const http = require('http');
 const raven = require('raven');
-const sharejs = require('share');
-const livedb = require('livedb');
+const sharedb = require('sharedb');
 const Duplex = require('stream').Duplex;
 const WebSocketServer = require('ws').Server;
 const express = require('express');
 const bodyParser = require('body-parser');
 const morgan = require('morgan');
 const async = require('async');
-const livedbMongo = require('livedb-mongo');
+const sharedbMongo = require('sharedb-mongo');
+const mongodb = require('mongodb');
 const fs = require('fs');
 const path = require('path');
 
@@ -44,8 +44,8 @@ if (settings.sentryDSN) {
 }
 
 const mongoOptions = {
-    safe: true,
-    server: {}
+    sslValidate: false,
+    useUnifiedTopology: true,
 };
 
 const mongoSSL = !!process.env.MONGO_SSL;
@@ -81,9 +81,10 @@ if (mongoSSL) {
 }
 
 // Server setup
-const mongo = livedbMongo(settings.dbUrl, mongoOptions);
-const backend = livedb.client(mongo);
-const share = sharejs.server.createClient({backend: backend});
+const db = sharedbMongo({mongo: function(callback) {
+    mongodb.connect(settings.dbUrl, mongoOptions, callback);
+  }});
+const share = new sharedb({db});
 const app = express();
 const jsonParser = bodyParser.json();
 const server = http.createServer(app);
@@ -110,7 +111,7 @@ app.use(function(req, res, next) {
 });
 
 // Serve static sharejs files
-app.use(express.static(sharejs.scriptsDir));
+app.use(express.static(__dirname + '/'));
 
 // Broadcasts message to all clients connected to that doc
 // TODO: Can we access the relevant list without iterating over every client?
