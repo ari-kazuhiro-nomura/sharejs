@@ -85,6 +85,15 @@ const db = sharedbMongo({mongo: function(callback) {
     mongodb.connect(settings.dbUrl, mongoOptions, callback);
   }});
 const share = new sharedb({db});
+const connection = share.connect();
+const doc = connection.get('docs', 'editor')
+doc.fetch(function(err) {
+    if (err) throw err;
+    if (!doc.type) {
+        doc.create('text');
+        return;
+    }
+})
 const app = express();
 const jsonParser = bodyParser.json();
 const server = http.createServer(app);
@@ -111,8 +120,7 @@ app.use(function(req, res, next) {
 });
 
 // Serve static sharejs files
-app.use(express.static(__dirname + '/'));
-
+app.use(express.static( 'http://0.0.0.0:5000/addons/wiki/templates'));
 // Broadcasts message to all clients connected to that doc
 // TODO: Can we access the relevant list without iterating over every client?
 wss.broadcast = function(docId, message) {
