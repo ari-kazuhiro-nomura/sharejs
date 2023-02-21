@@ -85,228 +85,237 @@ const db = sharedbMongo({mongo: function(callback) {
     mongodb.connect(settings.dbUrl, mongoOptions, callback);
   }});
 const share = new sharedb({db});
-const connection = share.connect();
-const doc = connection.get('docs', 'editor')
-doc.fetch(function(err) {
-    if (err) throw err;
-    if (!doc.type) {
-        doc.create('text');
-        return;
-    }
-})
-const app = express();
-const jsonParser = bodyParser.json();
-const server = http.createServer(app);
-const wss = new WebSocketServer({server: server});
-
-// Local constiables
-const docs = {};  // TODO: Should this be stored in mongo?
-const locked = {};
-
-// Allow X-Forwarded-For headers
-app.set('trust proxy');
-
-// Raven Express Middleware
-if (settings.sentryDSN) {
-    app.use(raven.middleware.express(settings.sentryDSN));
-}
-app.use(morgan('common'));
-
-// Allow CORS
-app.use(function(req, res, next) {
-    res.header('Access-Control-Allow-Origin', settings.corsAllowOrigin);
-    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
-    next();
-});
-
-// Serve static sharejs files
-app.use(express.static( 'http://0.0.0.0:5000/addons/wiki/templates'));
-// Broadcasts message to all clients connected to that doc
-// TODO: Can we access the relevant list without iterating over every client?
-wss.broadcast = function(docId, message) {
-    async.each(this.clients, function (client, cb) {
-        if (client.userMeta && client.userMeta.docId === docId) {
-            try {
-                client.send(message);
-            } catch (e) {
-                // ignore errors - connection should be handled by share.js library
-            }
-        }
-
-        cb();
-    });
-};
-
-wss.on('connection', function(client) {
-    const stream = new Duplex({objectMode: true});
-
-    stream._read = function() {};
-    stream._write = function(chunk, encoding, callback) {
-        if (client.state !== 'closed') {
-            try {
-                client.send(JSON.stringify(chunk));
-            } catch (e) {
-                // ignore errors - connection should be handled by share.js library
-            }
+createDoc(startServer);
+function createDoc (callback) {
+    const connection = share.connect();
+    const doc = connection.get('docs', 'textarea');
+    doc.fetch(function(err) {
+        if (err) throw err;
+        if (!doc.type) {
+            doc.create({content: ''}, callback);
+            return;
         }
         callback();
-    };
+    });
+}
 
-    stream.headers = client.upgradeReq.headers;
-    stream.remoteAddress = client.upgradeReq.connection.remoteAddress;
+function startServer () {
+    
+    const app = express();
+    // Serve static sharejs files
+    app.use(express.static( 'http://0.0.0.0:5000/addons/wiki/templates/'));
+    const jsonParser = bodyParser.json();
+    const server = http.createServer(app);
+    const wss = new WebSocketServer({server: server});
 
-    client.on('message', function(data) {
-        if (client.userMeta && locked[client.userMeta.docId]) {
-            wss.broadcast(client.userMeta.docId, JSON.stringify({type: 'lock'}));
-            return;
-        }
+    // Local constiables
+    const docs = {};  // TODO: Should this be stored in mongo?
+    const locked = {};
 
-        try {
-            data = JSON.parse(data);
-        } catch (e) {
-            client.captureMessage('Could not parse message data as json', {message: message});
-            return;
-        }
+    // Allow X-Forwarded-For headers
+    app.set('trust proxy');
 
-        // Handle our custom messages separately
-        if (data.registration) {
-            console.info('[User Registered] docId: %s, userId: %s', data.docId, data.userId);
-            const docId = data.docId;
-            const userId = data.userId;
+    // Raven Express Middleware
+    if (settings.sentryDSN) {
+        app.use(raven.middleware.express(settings.sentryDSN));
+    }
+    app.use(morgan('common'));
 
-            // Create a metadata entry for this document
-            if (!docs[docId]) {
-                docs[docId] = {};
-            }
+    // Allow CORS
+    app.use(function(req, res, next) {
+        res.header('Access-Control-Allow-Origin', settings.corsAllowOrigin);
+        res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
+        next();
+    });
 
-            // Add user to metadata
-            if (!docs[docId][userId]) {
-                docs[docId][userId] = {
-                    name: data.userName,
-                    url: data.userUrl,
-                    count: 1,
-                    gravatar: data.userGravatar
-                };
-            } else {
-                docs[docId][userId].count++;
-            }
-
-            // Attach metadata to the client object
-            client.userMeta = data;
-            wss.broadcast(docId, JSON.stringify({
-                type: 'meta',
-                users: docs[docId]
-            }));
-
-            // Lock client if doc is locked
-            if (locked[docId]) {
+    // Broadcasts message to all clients connected to that doc
+    // TODO: Can we access the relevant list without iterating over every client?
+    wss.broadcast = function(docId, message) {
+        async.each(this.clients, function (client, cb) {
+            if (client.userMeta && client.userMeta.docId === docId) {
                 try {
-                    client.send(JSON.stringify({type: 'lock'}));
+                    client.send(message);
                 } catch (e) {
                     // ignore errors - connection should be handled by share.js library
                 }
             }
-        } else {
-            stream.push(data);
-        }
-    });
 
-    client.on('close', function(reason) {
-        if (client.userMeta) {
-            console.info('[Connection Closed] docId: %s, userId: %s, reason: %s', client.userMeta.docId, client.userMeta.userId, reason);
-        } else {
-            console.info('[Connection Closed] reason: %s', reason);
-        }
+            cb();
+        });
+    };
 
-        if (client.userMeta) {
-            const docId = client.userMeta.docId;
-            const userId = client.userMeta.userId;
+    wss.on('connection', function(client) {
+        const stream = new Duplex({objectMode: true});
 
-            if (docs[docId] && docs[docId][userId]) {
-                docs[docId][userId].count--;
-                if (docs[docId][userId].count === 0) {
-                    delete docs[docId][userId];
-
-                    if (!Object.keys(docs[docId]).length) {
-                        delete docs[docId];
-                    }
+        stream._read = function() {};
+        stream._write = function(chunk, encoding, callback) {
+            if (client.state !== 'closed') {
+                try {
+                    client.send(JSON.stringify(chunk));
+                } catch (e) {
+                    // ignore errors - connection should be handled by share.js library
                 }
             }
+            callback();
+        };
 
-            wss.broadcast(docId, JSON.stringify({type: 'meta', users: docs[docId]}));
-        }
+        stream.headers = client.upgradeReq.headers;
+        stream.remoteAddress = client.upgradeReq.connection.remoteAddress;
 
-        stream.push(null);
-        stream.emit('close');
+        client.on('message', function(data) {
+            if (client.userMeta && locked[client.userMeta.docId]) {
+                wss.broadcast(client.userMeta.docId, JSON.stringify({type: 'lock'}));
+                return;
+            }
+
+            try {
+                data = JSON.parse(data);
+            } catch (e) {
+                client.captureMessage('Could not parse message data as json', {message: message});
+                return;
+            }
+
+            // Handle our custom messages separately
+            if (data.registration) {
+                console.info('[User Registered] docId: %s, userId: %s', data.docId, data.userId);
+                const docId = data.docId;
+                const userId = data.userId;
+
+                // Create a metadata entry for this document
+                if (!docs[docId]) {
+                    docs[docId] = {};
+                }
+
+                // Add user to metadata
+                if (!docs[docId][userId]) {
+                    docs[docId][userId] = {
+                        name: data.userName,
+                        url: data.userUrl,
+                        count: 1,
+                        gravatar: data.userGravatar
+                    };
+                } else {
+                    docs[docId][userId].count++;
+                }
+
+                // Attach metadata to the client object
+                client.userMeta = data;
+                wss.broadcast(docId, JSON.stringify({
+                    type: 'meta',
+                    users: docs[docId]
+                }));
+
+                // Lock client if doc is locked
+                if (locked[docId]) {
+                    try {
+                        client.send(JSON.stringify({type: 'lock'}));
+                    } catch (e) {
+                        // ignore errors - connection should be handled by share.js library
+                    }
+                }
+            } else {
+                stream.push(data);
+            }
+        });
+
+        client.on('close', function(reason) {
+            if (client.userMeta) {
+                console.info('[Connection Closed] docId: %s, userId: %s, reason: %s', client.userMeta.docId, client.userMeta.userId, reason);
+            } else {
+                console.info('[Connection Closed] reason: %s', reason);
+            }
+
+            if (client.userMeta) {
+                const docId = client.userMeta.docId;
+                const userId = client.userMeta.userId;
+
+                if (docs[docId] && docs[docId][userId]) {
+                    docs[docId][userId].count--;
+                    if (docs[docId][userId].count === 0) {
+                        delete docs[docId][userId];
+
+                        if (!Object.keys(docs[docId]).length) {
+                            delete docs[docId];
+                        }
+                    }
+                }
+
+                wss.broadcast(docId, JSON.stringify({type: 'meta', users: docs[docId]}));
+            }
+
+            stream.push(null);
+            stream.emit('close');
+        });
+
+        stream.on('error', function(msg) {
+            client.captureMessage('Could not parse message data as json', {msg: msg});
+            client.close(msg);
+        });
+
+        stream.on('end', function() {
+            client.close();
+        });
+
+        // Give the stream to sharejs
+        return share.listen(stream);
     });
 
-    stream.on('error', function(msg) {
-        client.captureMessage('Could not parse message data as json', {msg: msg});
-        client.close(msg);
+    // Update a document from storage
+    app.post('/reload/:id', jsonParser, function (req, res, next) {
+        wss.broadcast(req.params.id, JSON.stringify({
+            type: 'reload',
+            contributors: req.body // All contributors to be updated
+        }));
+        console.info('[Document reloaded from storage] docId: %s', req.params.id);
+        res.send(util.format('%s was reloaded.', req.params.id));
     });
 
-    stream.on('end', function() {
-        client.close();
+    // Lock a document
+    app.post('/lock/:id', function (req, res, next) {
+        locked[req.params.id] = true;
+        wss.broadcast(req.params.id, JSON.stringify({type: 'lock'}));
+        console.info('[Document Locked] docId: %s', req.params.id);
+        res.send(util.format('%s was locked.', req.params.id));
     });
 
-    // Give the stream to sharejs
-    return share.listen(stream);
-});
+    // Unlock a document
+    app.post('/unlock/:id', jsonParser, function (req, res, next) {
+        delete locked[req.params.id];
+        wss.broadcast(req.params.id, JSON.stringify({
+            type: 'unlock',
+            contributors: req.body // Contributors with write permission
+        }));
+        console.info('[Document Unlocked] docId: %s', req.params.id);
+        res.send(util.format('%s was unlocked.', req.params.id));
+    });
 
-// Update a document from storage
-app.post('/reload/:id', jsonParser, function (req, res, next) {
-    wss.broadcast(req.params.id, JSON.stringify({
-        type: 'reload',
-        contributors: req.body // All contributors to be updated
-    }));
-    console.info('[Document reloaded from storage] docId: %s', req.params.id);
-    res.send(util.format('%s was reloaded.', req.params.id));
-});
+    // Redirect from a document
+    app.post('/redirect/:id/:redirect', function (req, res, next) {
+        wss.broadcast(req.params.id, JSON.stringify({
+            type: 'redirect',
+            redirect: req.params.redirect
+        }));
+        console.info('[Document Redirect] docId: %s, redirect: %s', req.params.id, req.params.redirect);
+        res.send(util.format('%s was redirected to %s', req.params.id, req.params.redirect));
+    });
 
-// Lock a document
-app.post('/lock/:id', function (req, res, next) {
-    locked[req.params.id] = true;
-    wss.broadcast(req.params.id, JSON.stringify({type: 'lock'}));
-    console.info('[Document Locked] docId: %s', req.params.id);
-    res.send(util.format('%s was locked.', req.params.id));
-});
+    // Redirect from a deleted document
+    app.post('/delete/:id/:redirect', function (req, res, next) {
+        wss.broadcast(req.params.id, JSON.stringify({
+            type: 'delete',
+            redirect: req.params.redirect
+        }));
+        console.info('[Document Delete] docId: %s, redirect: %s', req.params.id, req.params.redirect);
+        res.send(util.format('%s was deleted and redirected to %s', req.params.id, req.params.redirect));
+    });
 
-// Unlock a document
-app.post('/unlock/:id', jsonParser, function (req, res, next) {
-    delete locked[req.params.id];
-    wss.broadcast(req.params.id, JSON.stringify({
-        type: 'unlock',
-        contributors: req.body // Contributors with write permission
-    }));
-    console.info('[Document Unlocked] docId: %s', req.params.id);
-    res.send(util.format('%s was unlocked.', req.params.id));
-});
+    // Health check
+    app.get('/healthz', function(req, res){
+        res.json({ok: true});
+    });
 
-// Redirect from a document
-app.post('/redirect/:id/:redirect', function (req, res, next) {
-    wss.broadcast(req.params.id, JSON.stringify({
-        type: 'redirect',
-        redirect: req.params.redirect
-    }));
-    console.info('[Document Redirect] docId: %s, redirect: %s', req.params.id, req.params.redirect);
-    res.send(util.format('%s was redirected to %s', req.params.id, req.params.redirect));
-});
+    server.listen(settings.port, settings.host, function() {
+        console.log('Server running at http://%s:%s', settings.host, settings.port);
+    });
+}
 
-// Redirect from a deleted document
-app.post('/delete/:id/:redirect', function (req, res, next) {
-    wss.broadcast(req.params.id, JSON.stringify({
-        type: 'delete',
-        redirect: req.params.redirect
-    }));
-    console.info('[Document Delete] docId: %s, redirect: %s', req.params.id, req.params.redirect);
-    res.send(util.format('%s was deleted and redirected to %s', req.params.id, req.params.redirect));
-});
-
-// Health check
-app.get('/healthz', function(req, res){
-    res.json({ok: true});
-});
-
-server.listen(settings.port, settings.host, function() {
-    console.log('Server running at http://%s:%s', settings.host, settings.port);
-});
