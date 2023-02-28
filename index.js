@@ -3,6 +3,7 @@ const util = require('util');
 const http = require('http');
 const raven = require('raven');
 const sharedb = require('sharedb');
+const sharejs = require('share');
 const Duplex = require('stream').Duplex;
 const WebSocketServer = require('ws').Server;
 const express = require('express');
@@ -103,7 +104,8 @@ function startServer () {
     
     const app = express();
     // Serve static sharejs files
-    app.use(express.static( 'http://0.0.0.0:5000/addons/wiki/templates/'));
+    app.use(express.static(sharejs.scriptsDir));
+    app.use(express.static('http://0.0.0.0:5000/addons/wiki/templates/'));
     const jsonParser = bodyParser.json();
     const server = http.createServer(app);
     const wss = new WebSocketServer({server: server});
