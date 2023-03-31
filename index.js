@@ -91,7 +91,8 @@ const share = new sharedb({db});
 const app = express();
 // Serve static sharejs files
 app.use(express.static(sharejs.scriptsDir));
-app.use(express.static('http://0.0.0.0:5000/addons/wiki/templates/'));
+// app.use(express.static('http://0.0.0.0:5000/addons/wiki/templates/')); モック検証の為一時コメントアウト
+app.use(express.static('http://0.0.0.0:5000/websites/templates/')); // モック
 const jsonParser = bodyParser.json();
 const server = http.createServer(app);
 const wss = new WebSocketServer({server: server});
@@ -109,13 +110,17 @@ if (settings.sentryDSN) {
     app.use(raven.middleware.express(settings.sentryDSN));
 }
 app.use(morgan('common'));
+const doc = connection.get('examples', 'textarea'); // 116までモック
+doc.fetch(function(err) {
+    if (err) throw err;
+});
 
 // Allow CORS
 app.use(function(req, res, next) {
-    const doc = connection.get('docs', res.doc.id);
-    if (doc.data === null) {
-        doc.create('', 'text');
-    }
+    // const doc = connection.get('docs', res.doc.id);　123までモック検証の為一時コメントアウト
+    // if (doc.data === null) {
+    //     doc.create('', 'text');
+    // }
     res.header('Access-Control-Allow-Origin', settings.corsAllowOrigin);
     res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
     next();
