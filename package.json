@@ -16,11 +16,12 @@
     "async": "^0.9.0",
     "body-parser": "~1.12.0",
     "express": "~4.10.0",
-    "livedb": "~0.4.8",
-    "livedb-mongo": "~0.4.1",
+    "sharedb-mongo": "~2.0.0",
     "morgan": "^1.5.1",
     "raven": "^0.7.2",
+    "sharedb": "3.2.1",
     "share": "0.7.27",
+    "mongodb": "3.5.7",
     "ws": "~0.4.32"
   }
 }

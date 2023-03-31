@@ -2,17 +2,19 @@
 const util = require('util');
 const http = require('http');
 const raven = require('raven');
+const sharedb = require('sharedb');
 const sharejs = require('share');
-const livedb = require('livedb');
 const Duplex = require('stream').Duplex;
 const WebSocketServer = require('ws').Server;
 const express = require('express');
 const bodyParser = require('body-parser');
 const morgan = require('morgan');
 const async = require('async');
-const livedbMongo = require('livedb-mongo');
+const sharedbMongo = require('sharedb-mongo');
+const mongodb = require('mongodb');
 const fs = require('fs');
 const path = require('path');
+const otText = require('ot-text');
 
 const settings = {
     debug: process.env.SHAREJS_DEBUG ? process.env.SHAREJS_DEBUG === 'true' : true,
@@ -44,8 +46,8 @@ if (settings.sentryDSN) {
 }
 
 const mongoOptions = {
-    safe: true,
-    server: {}
+    sslValidate: false,
+    useUnifiedTopology: true,
 };
 
 const mongoSSL = !!process.env.MONGO_SSL;
@@ -81,13 +83,20 @@ if (mongoSSL) {
 }
 
 // Server setup
-const mongo = livedbMongo(settings.dbUrl, mongoOptions);
-const backend = livedb.client(mongo);
-const share = sharejs.server.createClient({backend: backend});
+const db = sharedbMongo({mongo: function(callback) {
+    mongodb.connect(settings.dbUrl, mongoOptions, callback);
+  }});
+sharedb.types.register(otText.type);
+const share = new sharedb({db});
 const app = express();
+// Serve static sharejs files
+app.use(express.static(sharejs.scriptsDir));
+// app.use(express.static('http://0.0.0.0:5000/addons/wiki/templates/')); モック検証の為一時コメントアウト
+app.use(express.static('http://0.0.0.0:5000/websites/templates/')); // モック
 const jsonParser = bodyParser.json();
 const server = http.createServer(app);
 const wss = new WebSocketServer({server: server});
+const connection = share.connect();
 
 // Local constiables
 const docs = {};  // TODO: Should this be stored in mongo?
@@ -101,16 +110,21 @@ if (settings.sentryDSN) {
     app.use(raven.middleware.express(settings.sentryDSN));
 }
 app.use(morgan('common'));
+const doc = connection.get('examples', 'textarea'); // 116までモック
+doc.fetch(function(err) {
+    if (err) throw err;
+});
 
 // Allow CORS
 app.use(function(req, res, next) {
+    // const doc = connection.get('docs', res.doc.id);　123までモック検証の為一時コメントアウト
+    // if (doc.data === null) {
+    //     doc.create('', 'text');
+    // }
     res.header('Access-Control-Allow-Origin', settings.corsAllowOrigin);
     res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
     next();
 });
-
-// Serve static sharejs files
-app.use(express.static(sharejs.scriptsDir));
 
 // Broadcasts message to all clients connected to that doc
 // TODO: Can we access the relevant list without iterating over every client?
@@ -151,7 +165,6 @@ wss.on('connection', function(client) {
             wss.broadcast(client.userMeta.docId, JSON.stringify({type: 'lock'}));
             return;
         }
-
         try {
             data = JSON.parse(data);
         } catch (e) {
@@ -301,3 +314,4 @@ app.get('/healthz', function(req, res){
 server.listen(settings.port, settings.host, function() {
     console.log('Server running at http://%s:%s', settings.host, settings.port);
 });
+
